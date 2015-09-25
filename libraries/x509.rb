@@ -12,13 +12,14 @@ def x509_load_key(path)
   return EaSSL::Key.load(path)
 end
 
-def x509_generate_csr(key, name)
+def x509_generate_csr(key, digest, name)
+  digest = eval "OpenSSL::Digest::#{digest}.new"
   ea_name = EaSSL::CertificateName.new(name)
-  ea_csr  = EaSSL::SigningRequest.new(:name => ea_name, :key => key)
+  ea_csr  = EaSSL::SigningRequest.new(:name => ea_name, :key => key, :digest => digest)
   ea_csr
 end
 
-def x509_issue_self_signed_cert(csr, type, name)
+def x509_issue_self_signed_cert(csr, type, digest, name)
   # generate some randomness so that temporary CAs are unique, since
   # all the serial numbers are the same. some browsers will reject all
   # but the first with the same common name and serial, even if the
@@ -31,7 +32,8 @@ def x509_issue_self_signed_cert(csr, type, name)
     :signing_request => csr,
     :ca_certificate => ca.certificate
   )
-  cert.sign(ca.key)
+  digest = eval "OpenSSL::Digest::#{digest}.new"
+  cert.sign(ca.key, digest)
   return cert, ca
 end
 
@@ -48,4 +50,32 @@ def urlsafe_encode64(bin)
   else
     [bin].pack("m0").chomp("\n").tr("+/", "-_")
   end
+end
+
+#return an array of revoked certificate serial numbers
+def x509_revoked_serials()
+  serials = Array.new()
+  certs = search(:revoked_certificates)
+  certs.each do |cert|
+    serials << cert['serial']
+  end
+  return serials
+end
+
+#private get a crl item for the CA specified from the data bag
+def x509_get_crl(caname)
+  # search for CRL in one of its issued certificate databags
+  items = search('certificate_revocation_list', "ca:#{caname}") 
+  if items.nil? or items.size == 0
+    raise "Could not find CRL for CA '#{caname}'"
+  elsif items.size > 1
+    raise "Found more than one CRL for CA '#{caname}', there can only be one."
+  end
+  return items[0]
+end
+
+#for a caname in the certificate_revocation_list data bag, return the path to the file
+def x509_get_crl_path(caname) 
+  item = x509_get_crl(caname)
+  return "/etc/ssl/certs/#{item['hash']}.r0"  
 end
